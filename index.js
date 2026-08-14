@@ -57,6 +57,7 @@ const registerFacultyLimiter = rateLimit({
 const ALLOWED_ORIGINS = [
     "https://smart-attendance-pro-doctor.web.app",
     "https://smart-attendance-pro-doctor.firebaseapp.com",
+    "https://smartattendancepro-code.github.io",
     "http://localhost:5000",
     "http://127.0.0.1:5000",
     "http://localhost:5500",
