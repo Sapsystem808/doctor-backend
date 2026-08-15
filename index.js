@@ -610,7 +610,9 @@ app.post('/api/approveFaculty', verifyToken, verifyDeanRole, verifyAppCheck, asy
         }
 
         await admin.auth().setCustomUserClaims(targetUID, {
-            adminRole: targetData.role
+            adminRole: targetData.role,
+            college: targetData.college || 'NURS',
+            isAdminDoctor: targetData.isAdminDoctor || false
         });
 
         await targetRef.update({
