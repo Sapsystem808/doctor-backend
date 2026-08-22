@@ -390,8 +390,17 @@ app.post('/api/sync-supabase', verifyToken, verifyStaffRole, async (req, res) =>
         const { attended, absent, left, meta, doctorUID } = req.body;
         const records = [];
 
+        if (!doctorUID) {
+            return res.status(400).json({ error: "بيانات doctorUID ناقصة" });
+        }
         if (req.user.uid !== doctorUID) {
             return res.status(403).json({ error: "غير مصرح لك بإرسال بيانات دكتور آخر" });
+        }
+        if (!meta || typeof meta !== 'object') {
+            return res.status(400).json({ error: "بيانات meta ناقصة أو غير صحيحة" });
+        }
+        if (!meta.rawSubject || !meta.fixedDateStr) {
+            return res.status(400).json({ error: "بيانات meta غير مكتملة (subject/date مفقودة)" });
         }
 
         (attended || []).forEach(p => {
