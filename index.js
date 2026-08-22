@@ -93,7 +93,7 @@ const ALLOWED_ORIGINS = [
     "https://smart-attendance-pro-doctor.firebaseapp.com",
     "https://smart-attendance-pro-sap.web.app",
     "https://smart-attendance-pro-sap.firebaseapp.com",
-    
+
     "https://attendance-doctor.web.app",
     "https://attendance-doctor.firebaseapp.com",
 
@@ -443,9 +443,18 @@ app.post('/api/sync-supabase', verifyToken, verifyStaffRole, async (req, res) =>
         });
 
         if (records.length > 0) {
-            const { error } = await supabase.from('attendance_logs').upsert(records, { onConflict: 'student_id,subject_name,session_date,doctor_uid' }
+            const dedupMap = new Map();
+            for (const rec of records) {
+                const key = `${rec.student_id}|${rec.subject_name}|${rec.session_date}|${rec.doctor_uid}`;
+                dedupMap.set(key, rec);
+            }
+            const dedupedRecords = Array.from(dedupMap.values());
 
-            );
+            if (records.length !== dedupedRecords.length) {
+                console.warn(`⚠️ Removed ${records.length - dedupedRecords.length} duplicate record(s) before Supabase upsert (sync-supabase)`);
+            }
+
+            const { error } = await supabase.from('attendance_logs').upsert(dedupedRecords, { onConflict: 'student_id,subject_name,session_date,doctor_uid' });
             if (error) throw error;
         }
         res.status(200).json({ success: true, count: records.length });
@@ -772,12 +781,22 @@ app.post('/api/closeSession', closeSessionLimiter, verifyToken, verifyStaffRole,
             });
 
             if (supabaseRecords.length > 0) {
+                const dedupMap = new Map();
+                for (const rec of supabaseRecords) {
+                    const key = `${rec.student_id}|${rec.subject_name}|${rec.session_date}|${rec.doctor_uid}`;
+                    dedupMap.set(key, rec);
+                }
+                const dedupedRecords = Array.from(dedupMap.values());
+
+                if (supabaseRecords.length !== dedupedRecords.length) {
+                    console.warn(`⚠️ Removed ${supabaseRecords.length - dedupedRecords.length} duplicate record(s) before Supabase upsert (closeSession)`);
+                }
+
                 const { error } = await supabase.from('attendance_logs')
-                    .upsert(supabaseRecords, { onConflict: 'student_id,subject_name,session_date,doctor_uid' }
-                    );
+                    .upsert(dedupedRecords, { onConflict: 'student_id,subject_name,session_date,doctor_uid' });
 
                 if (error) console.error("❌ Supabase Error:", error);
-                else console.log(`✅ Supabase Mirroring Done: ${supabaseRecords.length} records`);
+                else console.log(`✅ Supabase Mirroring Done: ${dedupedRecords.length} records`);
             }
         } catch (supaErr) {
             console.error("❌ Supabase Logic Error:", supaErr);
