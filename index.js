@@ -985,7 +985,81 @@ app.post('/api/session/confirmManualAdd', manualAddLimiter, verifyToken, verifyS
         res.status(500).json({ error: "❌ فشل الحفظ، حاول مجدداً" });
     }
 });
+const forceLogoutLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    max: 30,
+    message: { error: "⏳ محاولات كثيرة جداً على هذا الإجراء، حاول بعد 5 دقائق" },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+app.post('/api/security/revokeAccess', forceLogoutLimiter, verifyToken, verifyDeanRole, async (req, res) => {
+    try {
+        const { targetUID, reason, disableAccount } = req.body;
+
+        if (!targetUID) {
+            return res.status(400).json({ error: "بيانات targetUID ناقصة" });
+        }
+
+        const targetRef = db.collection("faculty_members").doc(targetUID);
+        const targetSnap = await targetRef.get();
+
+        if (!targetSnap.exists) {
+            return res.status(404).json({ error: "الحساب المطلوب غير موجود" });
+        }
+        await admin.auth().revokeRefreshTokens(targetUID);
+
+        if (disableAccount === true) {
+            await admin.auth().updateUser(targetUID, { disabled: true });
+        }
+
+        await db.collection("security_flags").doc(targetUID).set({
+            forceLogout: true,
+            revokedAt: admin.firestore.FieldValue.serverTimestamp(),
+            revokedBy: req.user.uid,
+            reason: reason || "Suspicious activity detected by Dean"
+        }, { merge: true });
+
+        console.log(`🚨 [Security] Access revoked for ${targetUID} by dean ${req.user.uid} | disabled: ${!!disableAccount}`);
+
+        res.status(200).json({
+            success: true,
+            message: disableAccount
+                ? "تم إبطال الجلسة وتعطيل الحساب بالكامل"
+                : "تم إبطال الجلسة، الحساب لسه يقدر يسجل دخول تاني"
+        });
+
+    } catch (error) {
+        console.error("❌ Revoke Access Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/security/restoreAccess', forceLogoutLimiter, verifyToken, verifyDeanRole, async (req, res) => {
+    try {
+        const { targetUID } = req.body;
+        if (!targetUID) {
+            return res.status(400).json({ error: "بيانات targetUID ناقصة" });
+        }
+
+        await admin.auth().updateUser(targetUID, { disabled: false });
+
+        await db.collection("security_flags").doc(targetUID).set({
+            forceLogout: false,
+            restoredAt: admin.firestore.FieldValue.serverTimestamp(),
+            restoredBy: req.user.uid
+        }, { merge: true });
+
+        console.log(`✅ [Security] Access restored for ${targetUID} by dean ${req.user.uid}`);
+        res.status(200).json({ success: true, message: "تم استعادة الحساب بنجاح" });
+
+    } catch (error) {
+        console.error("❌ Restore Access Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
 
 app.listen(PORT, () => console.log(`🛡️ Server Running Port ${PORT}`));
+
 
 module.exports = app;
