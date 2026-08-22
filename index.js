@@ -125,9 +125,12 @@ const verifyToken = async (req, res, next) => {
     }
     try {
         const idToken = authHeader.split('Bearer ')[1];
-        req.user = await admin.auth().verifyIdToken(idToken);
+        req.user = await admin.auth().verifyIdToken(idToken, true); // ✅ true = checkRevoked
         next();
     } catch (error) {
+        if (error.code === 'auth/id-token-revoked' || error.code === 'auth/user-disabled') {
+            return res.status(401).json({ error: "⛔ تم إنهاء الجلسة، يرجى تسجيل الدخول مرة أخرى" });
+        }
         return res.status(403).json({ error: "Invalid Token" });
     }
 };
