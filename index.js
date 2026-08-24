@@ -1155,6 +1155,41 @@ app.post('/api/advising/addStudent', addAdvisingStudentLimiter, verifyToken, ver
     }
 });
 
+app.post('/api/advising/removeStudent', addAdvisingStudentLimiter, verifyToken, verifyStaffRole, async (req, res) => {
+    try {
+        const doctorUID = req.user.uid;
+        const studentId = String(req.body.studentId || '').trim();
+        if (!studentId) return res.status(400).json({ error: "الرقم الجامعي ناقص" });
+
+        const ownershipRef = db.collection('student_ownership').doc(studentId);
+        const advisingRef = db.collection('advising_students').doc(`${doctorUID}_${studentId}`);
+
+        await db.runTransaction(async (tx) => {
+            const ownershipSnap = await tx.get(ownershipRef);
+            const advisingSnap = await tx.get(advisingRef);
+
+            if (!advisingSnap.exists) {
+                throw new Error("NOT_FOUND");
+            }
+
+            if (ownershipSnap.exists && ownershipSnap.data().doctorUID === doctorUID) {
+                tx.delete(ownershipRef);
+            }
+
+            tx.delete(advisingRef);
+        });
+
+        console.log(`✅ Advising Student Removed: ${studentId} from ${doctorUID}`);
+        res.status(200).json({ success: true });
+    } catch (err) {
+        if (err.message === "NOT_FOUND") {
+            return res.status(404).json({ error: "الطالب غير موجود في قائمتك" });
+        }
+        console.error("Remove Advising Student Error:", err.message);
+        res.status(500).json({ error: "فشل حذف الطالب" });
+    }
+});
+
 const forceLogoutLimiter = rateLimit({
     windowMs: 5 * 60 * 1000,
     max: 30,
