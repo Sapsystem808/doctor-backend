@@ -80,6 +80,13 @@ const manualAddLimiter = rateLimit({
     legacyHeaders: false,
 });
 
+const addAdvisingStudentLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    max: 20,
+    message: { error: "⏳ محاولات كثيرة جداً على هذا الإجراء، حاول بعد 5 دقائق" },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
 const verifyEmailLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
@@ -96,6 +103,9 @@ const ALLOWED_ORIGINS = [
 
     "https://attendance-doctor.web.app",
     "https://attendance-doctor.firebaseapp.com",
+
+    "https://attendance-system-pro-dbdf1.web.app",
+    "https://attendance-system-pro-dbdf1.firebaseapp.com",
 
     "http://localhost:5000",
     "http://127.0.0.1:5000",
@@ -148,6 +158,15 @@ const verifyStaffRole = async (req, res, next) => {
     }
 };
 
+const DEAN_API_KEY = process.env.DEAN_API_KEY || "";
+
+const verifyApiKey = (req, res, next) => {
+    const key = req.headers['x-api-key'];
+    if (!key || key !== DEAN_API_KEY) {
+        return res.status(401).json({ error: "🚫 مفتاح API غير صحيح أو مفقود" });
+    }
+    next();
+};
 
 app.get('/', (req, res) => {
     res.status(200).send("🦅 Nursing System Backend is Running (Bulletproof V7 - Multi-College)");
@@ -253,6 +272,30 @@ const verifyDeanRole = async (req, res, next) => {
             return next();
         }
         return res.status(403).json({ error: "🚫 الموافقة متاحة فقط لعميد مفعّل" });
+    } catch (e) {
+        res.status(500).json({ error: "Security Check Failed" });
+    }
+};
+
+const verifyDeanOrAdminDoctor = async (req, res, next) => {
+    try {
+        const { role, college } = req.user;
+        if (!college) return res.status(403).json({ error: "🚫 غير مصرح لك بالوصول لهذا التقرير" });
+
+        if (role === 'dean') {
+            req.staffData = { role, college };
+            return next();
+        }
+
+        const facSnap = await db.collection('faculty_members').doc(req.user.uid).get();
+        const isAdminDoctor = facSnap.exists && facSnap.data().isAdminDoctor === true;
+
+        if (isAdminDoctor) {
+            req.staffData = { role, college };
+            return next();
+        }
+
+        return res.status(403).json({ error: "🚫 غير مصرح لك بالوصول لهذا التقرير" });
     } catch (e) {
         res.status(500).json({ error: "Security Check Failed" });
     }
@@ -848,6 +891,17 @@ app.post('/api/closeSession', closeSessionLimiter, verifyToken, verifyStaffRole,
     }
 });
 
+function normalizeArabicSearch(text) {
+    return (text || '')
+        .trim()
+        .replace(/[\u064B-\u065F\u0670]/g, '')
+        .replace(/[إأآا]/g, 'ا')
+        .replace(/ى/g, 'ي')
+        .replace(/ة/g, 'ه')
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+}
+
 const MANUAL_ADD_DAILY_LIMIT = 20;
 
 function getServerDateKey() {
@@ -988,6 +1042,119 @@ app.post('/api/session/confirmManualAdd', manualAddLimiter, verifyToken, verifyS
         res.status(500).json({ error: "❌ فشل الحفظ، حاول مجدداً" });
     }
 });
+
+app.get('/api/report/student', verifyToken, verifyDeanOrAdminDoctor, async (req, res) => {
+    try {
+        const studentId = String(req.query.studentId || '').trim();
+        if (!studentId) return res.status(400).json({ error: "studentId ناقص" });
+
+        const { data: records, error } = await supabase
+            .from('attendance_logs')
+            .select('*')
+            .eq('student_id', studentId);
+
+        if (error) throw error;
+        res.status(200).json({ records: records || [] });
+    } catch (err) {
+        console.error("Report Student Error:", err.message);
+        res.status(500).json({ error: "فشل جلب التقرير" });
+    }
+});
+
+app.get('/api/advising/check-ownership', verifyToken, verifyStaffRole, async (req, res) => {
+    try {
+        const studentId = String(req.query.studentId || '').trim();
+        if (!studentId) return res.status(400).json({ error: "بيانات studentId ناقصة" });
+
+        const snap = await db.collection('advising_students')
+            .where('studentId', '==', studentId)
+            .limit(1)
+            .get();
+
+        if (snap.empty) return res.status(200).json({ taken: false });
+
+        const data = snap.docs[0].data();
+        res.status(200).json({
+            taken: true,
+            doctorUID: data.doctorUID || null,
+            doctorName: data.doctorName || null
+        });
+    } catch (err) {
+        console.error("Check Ownership Error:", err.message);
+        res.status(500).json({ error: "تعذر التحقق من حالة الطالب" });
+    }
+});
+
+
+app.post('/api/advising/addStudent', addAdvisingStudentLimiter, verifyToken, verifyStaffRole, async (req, res) => {
+    try {
+        const doctorUID = req.user.uid;
+        const studentId = String(req.body.studentId || '').trim();
+        if (!studentId) return res.status(400).json({ error: "الرقم الجامعي ناقص" });
+
+        const [studentSnap, facultySnap, uidSnap] = await Promise.all([
+            db.collection('students').doc(studentId).get(),
+            db.collection('faculty_members').doc(doctorUID).get(),
+            db.collection('user_registrations').where('registrationInfo.studentID', '==', studentId).limit(1).get()
+        ]);
+
+        if (!studentSnap.exists) return res.status(404).json({ error: "لا يوجد طالب بهذا الرقم الجامعي" });
+        if (!facultySnap.exists) return res.status(403).json({ error: "بيانات المرشد الأكاديمي غير موجودة" });
+        if (uidSnap.empty) return res.status(404).json({ error: "لم يتم العثور على حساب مصادقة لهذا الطالب — تأكد إنه سجّل حساب في التطبيق أولاً" });
+
+        const stu = studentSnap.data();
+        const facultyData = facultySnap.data();
+        const studentName = stu.name || stu.fullName || stu.studentName || '—';
+        const level = stu.academic_level || stu.level || null;
+        const studentUID = uidSnap.docs[0].id;
+        const college = facultyData.college || req.user.college || 'NURS';
+        const doctorName = facultyData.fullName || facultyData.name || '—';
+
+        const ownershipRef = db.collection('student_ownership').doc(studentId);
+        const advisingRef = db.collection('advising_students').doc(`${doctorUID}_${studentId}`);
+
+        const result = await db.runTransaction(async (tx) => {
+            const ownershipSnap = await tx.get(ownershipRef);
+
+            if (ownershipSnap.exists) {
+                const existing = ownershipSnap.data();
+                if (existing.doctorUID !== doctorUID) {
+                    return { taken: true, doctorName: existing.doctorName };
+                }
+                return { alreadyOwn: true };
+            }
+
+            tx.set(ownershipRef, {
+                doctorUID, doctorName, college, studentName,
+                claimedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+
+            tx.set(advisingRef, {
+                studentId, studentName, level, studentUID,
+                searchName: normalizeArabicSearch(studentName),
+                searchDoctorName: normalizeArabicSearch(doctorName),
+                doctorUID, doctorName, college,
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+
+            return { success: true };
+        });
+
+        if (result.taken) {
+            return res.status(409).json({ error: `هذا الطالب مسجل بالفعل تحت رعاية د. ${result.doctorName || 'دكتور آخر'} — لا يمكن إضافته لأكثر من دكتور في نفس الوقت` });
+        }
+        if (result.alreadyOwn) {
+            return res.status(409).json({ error: "هذا الطالب مضاف بالفعل في قائمتك" });
+        }
+
+        console.log(`✅ Advising Student Added: ${studentId} → ${doctorUID}`);
+        res.status(200).json({ success: true, studentId, studentName, level, studentUID, doctorUID, doctorName, college });
+    } catch (err) {
+        console.error("Add Advising Student Error:", err.message);
+        res.status(500).json({ error: "فشل إضافة الطالب" });
+    }
+});
+
 const forceLogoutLimiter = rateLimit({
     windowMs: 5 * 60 * 1000,
     max: 30,
