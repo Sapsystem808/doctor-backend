@@ -276,6 +276,17 @@ const verifyDeanRole = async (req, res, next) => {
         res.status(500).json({ error: "Security Check Failed" });
     }
 };
+const verifyMasterAdmin = async (req, res, next) => {
+    try {
+        const facSnap = await db.collection("faculty_members").doc(req.user.uid).get();
+        if (!facSnap.exists || facSnap.data()?.isMasterAdmin !== true) {
+            return res.status(403).json({ error: "⛔ غير مصرح - Master Admin فقط" });
+        }
+        return next();
+    } catch (e) {
+        return res.status(500).json({ error: "Security Check Failed" });
+    }
+};
 
 const verifyDeanOrAdminDoctor = async (req, res, next) => {
     try {
@@ -383,7 +394,7 @@ app.post('/api/verifyFacultyEmail', verifyEmailLimiter, verifyToken, async (req,
     }
 });
 
-app.post('/api/verifyFacultyEmailManually', approveFacultyLimiter, verifyToken, verifyDeanRole, async (req, res) => {
+app.post('/api/verifyFacultyEmailManually', approveFacultyLimiter, verifyToken, verifyMasterAdmin, async (req, res) => {
     try {
         const { targetUID } = req.body;
         if (!targetUID) return res.status(400).json({ error: "Missing targetUID" });
