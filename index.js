@@ -382,6 +382,50 @@ app.post('/api/verifyFacultyEmail', verifyEmailLimiter, verifyToken, async (req,
         res.status(500).json({ error: error.message });
     }
 });
+
+app.post('/api/verifyFacultyEmailManually', approveFacultyLimiter, verifyToken, verifyDeanRole, async (req, res) => {
+    try {
+        const { targetUID } = req.body;
+        if (!targetUID) return res.status(400).json({ error: "Missing targetUID" });
+
+        const targetRef = db.collection("faculty_members").doc(targetUID);
+        const targetSnap = await targetRef.get();
+
+        if (!targetSnap.exists) {
+            return res.status(404).json({ error: "الحساب المطلوب غير موجود" });
+        }
+
+        const targetData = targetSnap.data();
+
+        if (targetData.isVerified === true) {
+            return res.status(400).json({ error: "الحساب مفعّل بالفعل" });
+        }
+
+        await admin.auth().updateUser(targetUID, { emailVerified: true });
+
+        await setDoctorClaims(
+            targetUID,
+            targetData.college || 'NURS',
+            targetData.isAdminDoctor || false,
+            targetData.role
+        );
+
+        await targetRef.update({
+            isVerified: true,
+            manual_verification: true,
+            verified_at: admin.firestore.FieldValue.serverTimestamp(),
+            verified_by: req.user.uid
+        });
+
+        console.log(`✅ Faculty Manually Verified (No Email): ${targetData.fullName} by ${req.user.uid}`);
+        res.status(200).json({ success: true, message: "تم تفعيل الحساب يدويًا بنجاح" });
+
+    } catch (error) {
+        console.error("Manual Faculty Verify Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get('/api/config', (req, res) => {
     res.json({
         authDomain: "attendance-system-pro-dbdf1.firebaseapp.com",
