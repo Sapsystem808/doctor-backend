@@ -28,6 +28,8 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
+const VALID_COLLEGES = ["NURS", "ENG", "ART", "MED", "VET", "MEDIA", "ALSUN", "PT", "DENT", "CS", "PHARM", "HS", "BA"];
+
 async function setDoctorClaims(uid, college, isAdmin = false, role = 'doctor') {
     await admin.auth().setCustomUserClaims(uid, {
         role: role,
@@ -91,6 +93,14 @@ const verifyEmailLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
     message: { error: "⏳ محاولات تفعيل كثيرة، حاول بعد قليل" },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+const changeCollegeLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    message: { error: "⏳ محاولات كثيرة جداً لتغيير الكلية، حاول بعد 15 دقيقة" },
     standardHeaders: true,
     legacyHeaders: false,
 });
@@ -205,7 +215,6 @@ app.post('/api/registerFaculty', registerFacultyLimiter, async (req, res) => {
             return res.status(403).json({ error: "🚫 المفتاح السري (Master Key) غير صحيح!" });
         }
 
-        const VALID_COLLEGES = ["NURS", "ENG", "ART", "MED", "VET", "MEDIA", "ALSUN", "PT", "DENT", "CS", "PHARM", "HS", "BA"];
         const finalCollege = (college && VALID_COLLEGES.includes(college.toUpperCase()))
             ? college.toUpperCase()
             : "NURS";
@@ -434,6 +443,66 @@ app.post('/api/verifyFacultyEmailManually', approveFacultyLimiter, verifyToken, 
     } catch (error) {
         console.error("Manual Faculty Verify Error:", error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/faculty/changeCollege', changeCollegeLimiter, verifyToken, verifyStaffRole, async (req, res) => {
+    try {
+        const uid = req.user.uid;
+        const newCollege = String(req.body.newCollege || '').trim().toUpperCase();
+
+        if (!newCollege) {
+            return res.status(400).json({ error: "⚠️ يرجى اختيار الكلية" });
+        }
+
+        if (!VALID_COLLEGES.includes(newCollege)) {
+            return res.status(400).json({ error: "🚫 كلية غير معروفة" });
+        }
+
+        const facRef = db.collection("faculty_members").doc(uid);
+        const facSnap = await facRef.get();
+
+        if (!facSnap.exists) {
+            return res.status(404).json({ error: "الحساب غير موجود" });
+        }
+
+        const facData = facSnap.data();
+
+        if (facData.shared !== true) {
+            return res.status(403).json({ error: "🚫 هذه الميزة غير مفعّلة لحسابك" });
+        }
+
+        if (facData.college === newCollege) {
+            return res.status(400).json({ error: "أنت بالفعل في هذه الكلية" });
+        }
+
+        const oldCollege = facData.college || "NURS";
+
+        await facRef.update({
+            college: newCollege,
+            collegeChangedAt: admin.firestore.FieldValue.serverTimestamp(),
+            collegeChangedFrom: oldCollege
+        });
+
+        await setDoctorClaims(
+            uid,
+            newCollege,
+            facData.isAdminDoctor || false,
+            facData.role
+        );
+
+        console.log(`🔄 College Changed: ${uid} | ${oldCollege} → ${newCollege}`);
+
+        res.status(200).json({
+            success: true,
+            message: "✅ تم تغيير الكلية بنجاح",
+            oldCollege,
+            newCollege
+        });
+
+    } catch (error) {
+        console.error("❌ Change College Error:", error);
+        res.status(500).json({ error: "حدث خطأ أثناء تغيير الكلية" });
     }
 });
 
