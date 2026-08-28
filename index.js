@@ -31,7 +31,11 @@ const db = admin.firestore();
 const VALID_COLLEGES = ["NURS", "ENG", "ART", "MED", "VET", "MEDIA", "ALSUN", "PT", "DENT", "CS", "PHARM", "HS", "BA"];
 
 async function setDoctorClaims(uid, college, isAdmin = false, role = 'doctor') {
+    const userRecord = await admin.auth().getUser(uid);
+    const existingClaims = userRecord.customClaims || {};
+
     await admin.auth().setCustomUserClaims(uid, {
+        ...existingClaims,
         role: role,
         college: college || 'NURS',
         isAdminDoctor: isAdmin
