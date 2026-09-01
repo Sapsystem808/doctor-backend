@@ -995,6 +995,11 @@ app.post('/api/advising/addStudent', addAdvisingStudentLimiter, verifyToken, ver
         const studentUID = uidSnap.docs[0].id;
         const college = facultyData.college || req.user.college || 'NURS';
         const doctorName = facultyData.fullName || facultyData.name || '—';
+        if (stu.college && stu.college !== college) {
+            return res.status(403).json({
+                error: `🚫 لا يمكن إضافة هذا الطالب — كليته (${stu.college}) مختلفة عن كليتك (${college})`
+            });
+        }
 
         const ownershipRef = db.collection('student_ownership').doc(studentId);
         const advisingRef = db.collection('advising_students').doc(`${doctorUID}_${studentId}`);
